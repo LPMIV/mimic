@@ -22,7 +22,7 @@ requests to the same API.
 
 ```
 capture traffic   ->   extract auth   ->   generate client
-  (mitmproxy)         (mimic.Session)      (claude reads the
+  (mitmproxy)         (mimic.Session)      (an AI reads the
                                             captured endpoints)
 ```
 
@@ -42,7 +42,7 @@ isolated tool env. mitmproxy isn't a separate install; mimic launches it via
 `uvx` on first `record`. (Manual: `uv tool install mimic-client`.)
 
 ```bash
-mimic doctor                    # confirm proxy + claude are ready
+mimic doctor                    # confirm proxy + an AI CLI are available
 ```
 
 ## Use it (iPhone)
@@ -68,6 +68,59 @@ mimic gen    prod-api.hingeaws.net    # generate hinge_client.py
 ```
 
 Then `from hinge_client import Hinge; Hinge().get_recommendations()`.
+
+## Generate with Codex (no API key)
+
+Claude remains the default; `--generator opencode` is also available. To use
+[Codex CLI](https://developers.openai.com/codex/cli), install a recent version
+and sign in with your ChatGPT account using `codex login`. mimic reuses that
+login and does not ask for an API key or read/copy your credentials. Account
+eligibility and usage limits still apply.
+
+Codex generation requires a **local review step before uploading any prompt**:
+
+```bash
+# 1. Prepare a local draft. No AI CLI/model is called.
+umask 077
+mimic gen api.example.com --generator codex --har traffic.har --prompt-only > prompt.txt
+
+# 2. Open prompt.txt in your editor and review/redact the ENTIRE file.
+#    For live mitmweb capture, omit --har traffic.har in step 1.
+
+# 3. Explicitly submit only the file you reviewed. No capture is read again.
+mimic gen api.example.com --generator codex --reviewed-prompt prompt.txt -o example_client.py
+```
+
+`--reviewed-prompt` is your instruction to send that entire file to the selected
+generator. It is not proof that the file is safe. Keep review files and captures
+private, outside version control. Review paths, query values, request/response
+bodies and free text for secrets, identifiers, messages and other personal data.
+Replace real values with synthetic examples or parameters and remove irrelevant
+endpoints. Do not upload live credentials or data you do not have permission to share.
+
+The Codex draft omits HTTP headers, redacts a limited list of common credential
+and personal-data keys in JSON/query strings, and omits non-JSON or truncated
+bodies. **This is not comprehensive secret detection.** Unknown fields, URL
+paths and free-text values can still contain private data. Original captures
+and session authentication are unchanged. Plain `--prompt-only` with the other
+generators keeps the existing, unredacted behavior; review that output too.
+
+Codex runs non-interactively with an empty temporary working directory, a
+read-only sandbox, no approval prompts, no session persistence, user config
+loading disabled, and shell/apps/plugins/hooks/multi-agent/memory/image tools
+disabled. Web search is disabled. These settings reduce incidental context and
+tool access; they are **not a complete isolation guarantee** against global
+skills or administrator configuration. Use a dedicated OS account if you need
+a stronger boundary. Normal Codex authentication is still used. This requires a
+CLI that supports `codex exec --ignore-user-config`; mimic fails without sending
+the prompt if that flag is missing. Update Codex if your version is too old.
+
+An optional `--model MODEL` selects a Codex model; otherwise Codex's built-in
+default is used (user model/config overrides are intentionally not loaded).
+mimic sends the prompt over stdin, reads the final answer separately from CLI
+logs, and checks Python syntax without executing it. Review generated code
+before importing or running it: valid syntax does not make it safe or correct.
+Generation alone never calls the captured API or runs the resulting client.
 
 ## The library
 
@@ -124,3 +177,13 @@ for accessing anyone else's. Respect each app's terms of service.
 
 MIT, see [LICENSE](LICENSE). Provided as-is, no warranty. Use on your own
 accounts and data; you are responsible for complying with each app's terms.
+
+## Development
+
+```bash
+python -m pip install -e . pytest
+python -m pytest -q
+```
+
+Codegen tests use synthetic data and a fake CLI process. They do not upload
+traffic, authenticate to a provider, or execute generated clients.
