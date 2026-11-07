@@ -108,9 +108,10 @@ def cmd_doctor(args):
     print("mimic setup check:\n")
     check("proxy (mitmweb or uvx)", _mitmweb_cmd() is not None,
           "install uv: curl -LsSf https://astral.sh/uv/install.sh | sh")
-    check("AI generator (claude or opencode)",
-          shutil.which("claude") is not None or shutil.which("opencode") is not None,
-          "install Claude Code or OpenCode (https://opencode.ai), or use `mimic gen --prompt-only`")
+    check("AI generator (claude, opencode, or codex)",
+          any(shutil.which(name) is not None for name in ("claude", "opencode", "codex")),
+          "install Claude Code, OpenCode (https://opencode.ai), or Codex CLI; "
+          "for Codex, run `codex login` (ChatGPT sign-in), or use `mimic gen --prompt-only`")
     reachable = False
     try:
         mitm.Mitm().flows()
@@ -162,25 +163,58 @@ def cmd_learn(args):
 
 
 def cmd_gen(args):
-    m, flows = _flows_from_args(args)
-    eps = _endpoints_from_args(args, m, flows)
-    if not eps:
-        sys.exit(f"no requests to {args.host} found")
+    reviewed_prompt = None
+    eps = []
+    if args.reviewed_prompt:
+        try:
+            with open(args.reviewed_prompt, encoding="utf-8", newline="") as f:
+                reviewed_prompt = f.read()
+        except (OSError, UnicodeError) as e:
+            sys.exit(f"can't read reviewed prompt: {e}")
+        if not reviewed_prompt.strip():
+            sys.exit("the reviewed prompt is empty; no data was sent")
+    else:
+        if args.generator == "codex" and not args.prompt_only:
+            sys.exit(
+                "Codex requires local review before upload. First run:\n"
+                f"  mimic gen {args.host} --generator codex --prompt-only [--har FILE] > prompt.txt\n"
+                "Review/edit the entire file to remove credentials and private data, then run:\n"
+                f"  mimic gen {args.host} --generator codex --reviewed-prompt prompt.txt\n"
+                "The second command sends that file to Codex using your existing login."
+            )
+        m, flows = _flows_from_args(args)
+        eps = _endpoints_from_args(args, m, flows)
+        if not eps:
+            sys.exit(f"no requests to {args.host} found")
 
     if args.prompt_only:
-        print(codegen.build_prompt(args.host, eps))
+        if args.generator == "codex":
+            print(
+                "LOCAL REVIEW DRAFT: no model called. Common credential/personal-data keys "
+                "are redacted, and non-JSON/truncated bodies omitted. This is NOT comprehensive "
+                "secret detection. Review the entire prompt, including paths, query values and "
+                "free text. Remove all private data you do not want sent to Codex. "
+                "Keep the draft private and outside version control.", file=sys.stderr,
+            )
+            print(codegen.build_review_prompt(args.host, eps))
+        else:
+            print(codegen.build_prompt(args.host, eps))
         return
 
     out = args.out or _default_out(args.host)
-    print(f"asking {args.generator} to write a client from {len(eps)} endpoints…", file=sys.stderr)
-    source = codegen.generate(args.host, eps, model=args.model, generator=args.generator)
-    with open(out, "w") as f:
+    description = "the reviewed prompt" if reviewed_prompt is not None else f"{len(eps)} endpoints"
+    print(f"asking {args.generator} to write a client from {description}…", file=sys.stderr)
+    source = codegen.generate(args.host, eps, model=args.model, generator=args.generator,
+                              reviewed_prompt=reviewed_prompt)
+    with open(out, "w", encoding="utf-8") as f:
         f.write(source)
     cls = _class_name(source)
     print(f"\nwrote {out}")
     print(f"\n    from {out[:-3]} import {cls or 'Client'}")
     print(f"    acc = {cls or 'Client'}()")
     print("    # then call the generated methods\n")
+    if args.generator == "codex":
+        print("Review the generated code before importing or running it. mimic did not execute it.")
 
 
 def _default_out(host):
@@ -212,10 +246,13 @@ def main(argv=None):
     gp = sub.add_parser("gen", help="AI-generate a client for a host")
     gp.add_argument("host")
     gp.add_argument("-o", "--out", help="output .py path")
-    gp.add_argument("--model", default="sonnet", help="model name (claude default: sonnet)")
-    gp.add_argument("--generator", default="claude", choices=["claude", "opencode"],
+    gp.add_argument("--model", help="model name (Claude default: sonnet; Codex: CLI default)")
+    gp.add_argument("--generator", default="claude", choices=["claude", "opencode", "codex"],
                     help="AI generator to use (default: claude)")
-    gp.add_argument("--prompt-only", action="store_true", help="print the prompt instead of calling the AI generator")
+    input_mode = gp.add_mutually_exclusive_group()
+    input_mode.add_argument("--prompt-only", action="store_true", help="print the prompt locally without calling a model")
+    input_mode.add_argument("--reviewed-prompt", metavar="FILE",
+                           help="send this entire locally reviewed/edited prompt, without re-reading traffic (required for Codex)")
     gp.add_argument("--har", metavar="FILE", help="read from a HAR file instead of mitmweb")
     gp.set_defaults(func=cmd_gen)
 
@@ -228,6 +265,8 @@ def main(argv=None):
     up.set_defaults(func=unpin.cmd_unpin)
 
     args = p.parse_args(argv)
+    if getattr(args, "reviewed_prompt", None) and getattr(args, "har", None):
+        p.error("--reviewed-prompt cannot be combined with --har; reviewed generation never reads capture files")
     args.func(args)
 
 
