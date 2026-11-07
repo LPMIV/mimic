@@ -153,6 +153,22 @@ def test_codex_failure_does_not_echo_private_logs(monkeypatch):
     assert "private diagnostics" not in str(error.value)
 
 
+def test_codex_read_only_startup_error_is_not_misreported_as_login(monkeypatch):
+    def run(command, **kwargs):
+        if "--help" in command:
+            return subprocess.CompletedProcess(command, 0, "--ignore-user-config", "")
+        return subprocess.CompletedProcess(
+            command, 1, "", "private diagnostic data\n"
+            "Error: failed to initialize in-process app-server client: Read-only file system (os error 30)",
+        )
+
+    monkeypatch.setattr(codegen.subprocess, "run", run)
+    with pytest.raises(SystemExit, match="read-only filesystem") as error:
+        codegen.generate("api.example.com", [], generator="codex", reviewed_prompt="example")
+    assert "private diagnostic data" not in str(error.value)
+    assert "codex login status" not in str(error.value)
+
+
 @pytest.mark.parametrize("generator, model, expected", [
     ("claude", None, ["claude", "-p", "--model", "sonnet"]),
     ("claude", "opus", ["claude", "-p", "--model", "opus"]),

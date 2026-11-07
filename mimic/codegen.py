@@ -177,6 +177,13 @@ def _generate_codex(prompt, model):
         )
         if proc.returncode:
             # Progress/error streams can echo submitted data; don't print them.
+            error = proc.stderr.lower()
+            if "failed to initialize" in error and "read-only file system" in error:
+                sys.exit(
+                    "codex could not initialize on this read-only filesystem; no client was written. "
+                    "Run from a writable Codex installation/profile. Signing in again to the same "
+                    "read-only profile will not fix this storage error."
+                )
             sys.exit(
                 f"codex failed (exit {proc.returncode}); no client was written. "
                 "Check `codex login status`, your account limits, and update Codex CLI."

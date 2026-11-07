@@ -185,5 +185,18 @@ python -m pip install -e . pytest
 python -m pytest -q
 ```
 
-Codegen tests use synthetic data and a fake CLI process. They do not upload
-traffic, authenticate to a provider, or execute generated clients.
+Default codegen tests use synthetic data and a fake CLI process. They do not
+upload traffic, authenticate to a provider, or execute generated clients.
+
+To opt into a real signed-in Codex smoke test (consumes your account usage):
+
+```bash
+codex login status
+MIMIC_LIVE_CODEX=1 python -m pytest tests/test_codegen_live.py -q
+```
+
+This test generates a local synthetic HAR, checks redaction, edits the prompt,
+and submits only its reviewed synthetic contents to Codex. It validates the
+returned client without importing or running it, and never calls the example
+API. The Codex runtime must be writable: a startup error mentioning a read-only
+filesystem is a storage problem, even when `codex login status` succeeds.
